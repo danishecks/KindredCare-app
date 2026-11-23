@@ -33,7 +33,9 @@ const ALLOWED_CLAIM_STATUSES = new Set<ClaimStatus>([
   'Flagged',
   'Appeal Drafted',
   'Submitted',
+  'Under Review',
   'Overturned',
+  'Denied',
   'Cleared',
 ]);
 
@@ -167,13 +169,14 @@ async function startServer() {
     }
   });
 
-  // Update claim status or edited appeal letter
+  // Update claim status, submission date, or edited appeal letter
   app.patch('/api/claims/:id', (req, res) => {
     try {
       const { id } = req.params;
-      const { status, appealLetter } = req.body as {
+      const { status, appealLetter, submittedAt } = req.body as {
         status?: ClaimStatus;
         appealLetter?: string;
+        submittedAt?: string | null;
       };
 
       if (status !== undefined && !ALLOWED_CLAIM_STATUSES.has(status)) {
@@ -184,8 +187,12 @@ async function startServer() {
         res.status(400).json({ error: 'appealLetter must be a string.' });
         return;
       }
+      if (submittedAt !== undefined && submittedAt !== null && !isValidIsoDate(submittedAt)) {
+        res.status(400).json({ error: 'submittedAt must be a YYYY-MM-DD date string.' });
+        return;
+      }
 
-      const updated = updateClaim(id, { status, appealLetter });
+      const updated = updateClaim(id, { status, appealLetter, submittedAt });
       if (!updated) {
         res.status(404).json({ error: 'Claim not found.' });
         return;

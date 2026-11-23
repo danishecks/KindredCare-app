@@ -45,7 +45,14 @@ export interface ClaimError {
   policyCitation: string;
 }
 
-export type ClaimStatus = 'Flagged' | 'Appeal Drafted' | 'Submitted' | 'Overturned' | 'Cleared';
+export type ClaimStatus =
+  | 'Flagged'
+  | 'Appeal Drafted'
+  | 'Submitted'
+  | 'Under Review'
+  | 'Overturned'
+  | 'Denied'
+  | 'Cleared';
 
 export interface MedicalClaim {
   id: string;
@@ -65,6 +72,8 @@ export interface MedicalClaim {
   errors: ClaimError[];
   appealLetter: string;
   uploadedBy: string;
+  submittedAt?: string | null;
+  decisionAt?: string | null;
   createdAt: string;
 }
 

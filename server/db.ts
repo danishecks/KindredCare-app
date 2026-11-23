@@ -62,6 +62,8 @@ db.exec(`
     errors_json TEXT NOT NULL,
     appeal_letter TEXT NOT NULL,
     uploaded_by TEXT NOT NULL,
+    submitted_at TEXT,
+    decision_at TEXT,
     created_at TEXT NOT NULL
   );
 
@@ -94,6 +96,19 @@ db.exec(`
     FOREIGN KEY (to_member_id) REFERENCES family_members(id)
   );
 `);
+
+// Safe column migration for existing SQLite databases
+const claimCols = db.prepare('PRAGMA table_info(medical_claims)').all() as Array<{ name: string }>;
+const claimColNames = new Set(claimCols.map((c) => c.name));
+if (!claimColNames.has('submitted_at')) {
+  db.exec('ALTER TABLE medical_claims ADD COLUMN submitted_at TEXT');
+}
+if (!claimColNames.has('decision_at')) {
+  db.exec('ALTER TABLE medical_claims ADD COLUMN decision_at TEXT');
+}
+// Ensure existing seeded submitted/overturned claims have realistic tracking dates
+db.prepare("UPDATE medical_claims SET submitted_at = '2026-11-04' WHERE id = 'claim-3' AND submitted_at IS NULL").run();
+db.prepare("UPDATE medical_claims SET submitted_at = '2026-08-29', decision_at = '2026-09-18' WHERE id = 'claim-4' AND submitted_at IS NULL").run();
 
 function seedInitialDataIfEmpty(): void {
   const memberCount = (db.prepare('SELECT COUNT(*) as count FROM family_members').get() as { count: number }).count;
@@ -160,8 +175,8 @@ function seedInitialDataIfEmpty(): void {
     INSERT INTO medical_claims (
       id, provider, insurer, policy_number, service_date, patient_name, document_type,
       billed_amount, allowed_amount, patient_responsibility, potential_savings, status,
-      denial_reason, cpt_codes_json, errors_json, appeal_letter, uploaded_by, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      denial_reason, cpt_codes_json, errors_json, appeal_letter, uploaded_by, submitted_at, decision_at, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const claim1Cpts: CptLineItem[] = [
@@ -217,6 +232,8 @@ function seedInitialDataIfEmpty(): void {
     JSON.stringify(claim1Errors),
     '',
     'maya',
+    null,
+    null,
     '2026-10-19T14:20:00Z'
   );
 
@@ -276,6 +293,8 @@ David Chen (Authorized Care Representative for Eleanor Vance)`;
     JSON.stringify(claim2Errors),
     claim2Appeal,
     'david',
+    null,
+    null,
     '2026-10-22T09:45:00Z'
   );
 
@@ -313,6 +332,8 @@ David Chen (Authorized Care Representative for Eleanor Vance)`;
     JSON.stringify(claim3Errors),
     'Formal coding correction request and preventive zero-cost-share appeal submitted to Aetna Provider & Member Appeals portal on Nov 04, 2026.',
     'maya',
+    '2026-11-04',
+    null,
     '2026-10-05T11:10:00Z'
   );
 
@@ -350,6 +371,8 @@ David Chen (Authorized Care Representative for Eleanor Vance)`;
     JSON.stringify(claim4Errors),
     'Appeal Letter successfully overturned $5,800 denial under Jimmo v. Sebelius maintenance therapy coverage criteria.',
     'david',
+    '2026-08-29',
+    '2026-09-18',
     '2026-08-27T16:30:00Z'
   );
 
@@ -411,6 +434,8 @@ function parseClaimRow(row: Record<string, unknown>): MedicalClaim {
     errors: JSON.parse(String(row.errors_json)) as ClaimError[],
     appealLetter: String(row.appeal_letter),
     uploadedBy: String(row.uploaded_by),
+    submittedAt: row.submitted_at ? String(row.submitted_at) : null,
+    decisionAt: row.decision_at ? String(row.decision_at) : null,
     createdAt: String(row.created_at),
   };
 }
@@ -574,8 +599,8 @@ export function createClaim(claim: MedicalClaim): MedicalClaim {
     INSERT INTO medical_claims (
       id, provider, insurer, policy_number, service_date, patient_name, document_type,
       billed_amount, allowed_amount, patient_responsibility, potential_savings, status,
-      denial_reason, cpt_codes_json, errors_json, appeal_letter, uploaded_by, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      denial_reason, cpt_codes_json, errors_json, appeal_letter, uploaded_by, submitted_at, decision_at, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     claim.id,
     claim.provider,
@@ -594,6 +619,8 @@ export function createClaim(claim: MedicalClaim): MedicalClaim {
     JSON.stringify(claim.errors),
     claim.appealLetter,
     claim.uploadedBy,
+    claim.submittedAt ?? null,
+    claim.decisionAt ?? null,
     claim.createdAt
   );
   return claim;
@@ -601,19 +628,37 @@ export function createClaim(claim: MedicalClaim): MedicalClaim {
 
 export function updateClaim(
   id: string,
-  updates: Partial<{ status: ClaimStatus; appealLetter: string }>
+  updates: Partial<{
+    status: ClaimStatus;
+    appealLetter: string;
+    submittedAt: string | null;
+    decisionAt: string | null;
+  }>
 ): MedicalClaim | null {
   const existing = getClaimById(id);
   if (!existing) return null;
 
+  const todayIso = new Date().toISOString().slice(0, 10);
   const nextStatus = updates.status ?? existing.status;
   const nextAppeal = updates.appealLetter !== undefined ? updates.appealLetter : existing.appealLetter;
 
-  db.prepare('UPDATE medical_claims SET status = ?, appeal_letter = ? WHERE id = ?').run(
-    nextStatus,
-    nextAppeal,
-    id
-  );
+  let nextSubmittedAt = updates.submittedAt !== undefined ? updates.submittedAt : existing.submittedAt ?? null;
+  let nextDecisionAt = updates.decisionAt !== undefined ? updates.decisionAt : existing.decisionAt ?? null;
+
+  if ((nextStatus === 'Submitted' || nextStatus === 'Under Review') && !nextSubmittedAt) {
+    nextSubmittedAt = todayIso;
+  }
+  if (nextStatus === 'Flagged' || nextStatus === 'Appeal Drafted') {
+    nextDecisionAt = null;
+  }
+  if ((nextStatus === 'Overturned' || nextStatus === 'Denied') && !nextDecisionAt) {
+    if (!nextSubmittedAt) nextSubmittedAt = todayIso;
+    nextDecisionAt = todayIso;
+  }
+
+  db.prepare(
+    'UPDATE medical_claims SET status = ?, appeal_letter = ?, submitted_at = ?, decision_at = ? WHERE id = ?'
+  ).run(nextStatus, nextAppeal, nextSubmittedAt, nextDecisionAt, id);
   return getClaimById(id);
 }
 

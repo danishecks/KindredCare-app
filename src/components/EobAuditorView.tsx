@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import {
   AlertTriangle,
   Check,
-  CheckCircle2,
   Copy,
   FileCheck2,
   Loader2,
@@ -13,7 +12,9 @@ import {
   Upload,
 } from 'lucide-react';
 import type { ClaimStatus, FamilyMember, MedicalClaim } from '../types';
+import { getInsurerTimeline } from '../utils/appealTimeline';
 import { formatCurrency, formatShortDate } from '../utils/format';
+import { AppealProgressTracker } from './AppealProgressTracker';
 
 interface EobAuditorViewProps {
   claims: MedicalClaim[];
@@ -29,7 +30,9 @@ const STATUS_FILTERS: Array<'All' | ClaimStatus> = [
   'Flagged',
   'Appeal Drafted',
   'Submitted',
+  'Under Review',
   'Overturned',
+  'Denied',
 ];
 
 export const EobAuditorView: React.FC<EobAuditorViewProps> = ({
@@ -98,7 +101,11 @@ export const EobAuditorView: React.FC<EobAuditorViewProps> = ({
     }
   };
 
-  const handleUpdateClaim = async (updates: { status?: ClaimStatus; appealLetter?: string }) => {
+  const handleUpdateClaim = async (updates: {
+    status?: ClaimStatus;
+    appealLetter?: string;
+    submittedAt?: string | null;
+  }) => {
     if (!activeClaim) return;
     setErrorMsg(null);
     setIsSaving(true);
@@ -131,10 +138,12 @@ export const EobAuditorView: React.FC<EobAuditorViewProps> = ({
   const statusTextColor = (status: ClaimStatus) => {
     switch (status) {
       case 'Flagged':
+      case 'Denied':
         return 'text-[#DC2626]';
       case 'Appeal Drafted':
         return 'text-[#D97706]';
       case 'Submitted':
+      case 'Under Review':
         return 'text-[#2D5A4C]';
       case 'Overturned':
       case 'Cleared':
@@ -226,6 +235,7 @@ export const EobAuditorView: React.FC<EobAuditorViewProps> = ({
             <div className="divide-y divide-[#E5E2DC]">
               {filteredClaims.map((claim) => {
                 const isSelected = activeClaim?.id === claim.id;
+                const claimTimeline = getInsurerTimeline(claim);
                 return (
                   <button
                     key={claim.id}
@@ -249,13 +259,38 @@ export const EobAuditorView: React.FC<EobAuditorViewProps> = ({
                     <div className="mt-0.5 truncate text-xs text-[#5A6662]">
                       {claim.insurer} · {claim.documentType}
                     </div>
+                    {(claim.status === 'Submitted' || claim.status === 'Under Review') &&
+                      claimTimeline.submittedDate && (
+                        <div className="mt-2">
+                          <div className="flex items-center justify-between font-mono text-[11px] text-[#5A6662] tabular-nums">
+                            <span>
+                              Day {claimTimeline.elapsedDays}/{claimTimeline.slaDays}
+                            </span>
+                            <span>
+                              Est. {formatShortDate(claimTimeline.estimatedDecisionDate || '')}
+                            </span>
+                          </div>
+                          <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-[#E5E2DC]">
+                            <div
+                              className="h-full bg-[#2D5A4C]"
+                              style={{ width: `${claimTimeline.timelineProgressPct}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
                     <div className="mt-2 flex items-center justify-between text-xs">
                       <span className="text-[#5A6662]">
                         {claim.errors.length} {claim.errors.length === 1 ? 'issue' : 'issues'} detected
                       </span>
-                      <span className="font-mono font-semibold text-[#16A34A] tabular-nums">
+                      <span
+                        className={`font-mono font-semibold tabular-nums ${
+                          claim.status === 'Denied' ? 'text-[#DC2626]' : 'text-[#16A34A]'
+                        }`}
+                      >
                         {claim.potentialSavings > 0
-                          ? `Save ${formatCurrency(claim.potentialSavings)}`
+                          ? claim.status === 'Denied'
+                            ? `Denied ${formatCurrency(claim.potentialSavings)}`
+                            : `Save ${formatCurrency(claim.potentialSavings)}`
                           : 'Verified'}
                       </span>
                     </div>
@@ -268,6 +303,12 @@ export const EobAuditorView: React.FC<EobAuditorViewProps> = ({
           {/* Claim Detail & Appeal Studio */}
           {activeClaim && (
             <div className="space-y-6 lg:col-span-8">
+              <AppealProgressTracker
+                claim={activeClaim}
+                isSaving={isSaving}
+                onUpdateClaim={handleUpdateClaim}
+              />
+
               <div className="rounded-xl border border-[#E5E2DC] bg-white p-6">
                 <div className="flex flex-col justify-between gap-4 border-b border-[#E5E2DC] pb-4 sm:flex-row sm:items-start">
                   <div>
@@ -286,30 +327,6 @@ export const EobAuditorView: React.FC<EobAuditorViewProps> = ({
                     <p className="text-xs text-[#5A6662]">
                       Insurer: {activeClaim.insurer} · Patient: {activeClaim.patientName}
                     </p>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    {activeClaim.status !== 'Submitted' && activeClaim.status !== 'Overturned' && (
-                      <button
-                        type="button"
-                        disabled={isSaving}
-                        onClick={() => handleUpdateClaim({ status: 'Submitted' })}
-                        className="whitespace-nowrap rounded-lg border border-[#E5E2DC] px-3 py-1.5 text-xs font-medium text-[#1C2421] hover:bg-[#F1EFEA]"
-                      >
-                        Mark Submitted
-                      </button>
-                    )}
-                    {activeClaim.status !== 'Overturned' && (
-                      <button
-                        type="button"
-                        disabled={isSaving}
-                        onClick={() => handleUpdateClaim({ status: 'Overturned' })}
-                        className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-[#16A34A]/30 bg-[#16A34A]/10 px-3 py-1.5 text-xs font-medium text-[#16A34A] hover:bg-[#16A34A]/15"
-                      >
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        Mark Overturned
-                      </button>
-                    )}
                   </div>
                 </div>
 

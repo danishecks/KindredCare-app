@@ -21,7 +21,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   const { claims, expenses, members, balances, settings, suggestedTransfers } = workspace;
 
   const openSavings = claims
-    .filter((c) => c.status !== 'Overturned' && c.status !== 'Cleared')
+    .filter((c) => c.status !== 'Overturned' && c.status !== 'Cleared' && c.status !== 'Denied')
     .reduce((sum, c) => sum + c.potentialSavings, 0);
 
   const recoveredSavings = claims
