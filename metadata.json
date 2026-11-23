@@ -1,0 +1,6 @@
+{
+  "name": "KindredCare — Care Split & Insurance Appeal Copilot",
+  "description": "Family caregiving workspace for AI EOB and hospital bill auditing, one-click insurance appeal drafting, custom sibling expense splitting, and IRS/Medicaid spend-down documentation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
