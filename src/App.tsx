@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
+  ArrowLeft,
   FileSearch,
   FolderArchive,
   LayoutDashboard,
@@ -14,9 +15,11 @@ import { EobAuditorView } from './components/EobAuditorView';
 import { OverviewView } from './components/OverviewView';
 import { SplitLedgerView } from './components/SplitLedgerView';
 import { TaxMedicaidVaultView } from './components/TaxMedicaidVaultView';
+import { WebsiteLandingView, type WorkspaceEntryTab } from './components/WebsiteLandingView';
 import type { MedicalClaim, WorkspaceSnapshot } from './types';
 
-type ActiveTab = 'overview' | 'auditor' | 'ledger' | 'vault' | 'plan';
+type ActiveTab = WorkspaceEntryTab;
+type ViewMode = 'website' | 'workspace';
 
 const TAB_LABELS: Record<ActiveTab, string> = {
   overview: 'Overview',
@@ -26,9 +29,24 @@ const TAB_LABELS: Record<ActiveTab, string> = {
   plan: 'Care Plan & Compliance',
 };
 
+function parseRouteFromHash(): { mode: ViewMode; tab: ActiveTab } {
+  const hash = window.location.hash;
+  if (!hash.startsWith('#/workspace')) {
+    return { mode: 'website', tab: 'overview' };
+  }
+  const suffix = hash.replace('#/workspace', '').replace(/^\//, '');
+  if (suffix === 'auditor' || suffix === 'ledger' || suffix === 'vault' || suffix === 'plan') {
+    return { mode: 'workspace', tab: suffix };
+  }
+  return { mode: 'workspace', tab: 'overview' };
+}
+
 export default function App() {
+  const initialRoute = parseRouteFromHash();
+  const [viewMode, setViewMode] = useState<ViewMode>(initialRoute.mode);
+  const [activeTab, setActiveTab] = useState<ActiveTab>(initialRoute.tab);
+
   const [workspace, setWorkspace] = useState<WorkspaceSnapshot | null>(null);
-  const [activeTab, setActiveTab] = useState<ActiveTab>('overview');
   const [activeMemberId, setActiveMemberId] = useState<string>('maya');
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
   const [captureOpen, setCaptureOpen] = useState(false);
@@ -56,6 +74,36 @@ export default function App() {
     void fetchWorkspace();
   }, [fetchWorkspace]);
 
+  useEffect(() => {
+    const onHashChange = () => {
+      const parsed = parseRouteFromHash();
+      setViewMode(parsed.mode);
+      setActiveTab(parsed.tab);
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
+  const navigateToWebsite = () => {
+    window.location.hash = '#/';
+    setViewMode('website');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const navigateToWorkspace = (tab: ActiveTab = 'overview') => {
+    const targetHash = tab === 'overview' ? '#/workspace' : `#/workspace/${tab}`;
+    if (window.location.hash !== targetHash) {
+      window.location.hash = targetHash;
+    }
+    setActiveTab(tab);
+    setViewMode('workspace');
+    window.scrollTo({ top: 0 });
+  };
+
+  if (viewMode === 'website') {
+    return <WebsiteLandingView onLaunchWorkspace={(tab) => navigateToWorkspace(tab ?? 'overview')} />;
+  }
+
   if (isLoading && !workspace) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#F8F7F4] text-[#1C2421]">
@@ -73,13 +121,22 @@ export default function App() {
         <div className="max-w-md rounded-xl border border-[#E5E2DC] bg-white p-6 text-center">
           <h1 className="text-base font-semibold text-[#1C2421]">Workspace Unavailable</h1>
           <p className="mt-2 text-xs text-[#5A6662]">{loadError}</p>
-          <button
-            type="button"
-            onClick={() => void fetchWorkspace()}
-            className="mt-4 rounded-lg bg-[#2D5A4C] px-4 py-2 text-xs font-medium text-white hover:bg-[#23473C]"
-          >
-            Retry Connection
-          </button>
+          <div className="mt-4 flex items-center justify-center gap-3">
+            <button
+              type="button"
+              onClick={navigateToWebsite}
+              className="rounded-lg border border-[#E5E2DC] px-4 py-2 text-xs font-medium text-[#1C2421] hover:bg-[#F1EFEA]"
+            >
+              Back to Website
+            </button>
+            <button
+              type="button"
+              onClick={() => void fetchWorkspace()}
+              className="rounded-lg bg-[#2D5A4C] px-4 py-2 text-xs font-medium text-white hover:bg-[#23473C]"
+            >
+              Retry Connection
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -97,11 +154,11 @@ export default function App() {
 
   const handleClaimAudited = (claim: MedicalClaim) => {
     setSelectedClaimId(claim.id);
-    setActiveTab('auditor');
+    navigateToWorkspace('auditor');
   };
 
   const handleExpenseCreated = () => {
-    setActiveTab('ledger');
+    navigateToWorkspace('ledger');
   };
 
   const navItems: Array<{ id: ActiveTab; label: string; icon: React.ComponentType<{ className?: string }> }> = [
@@ -119,9 +176,13 @@ export default function App() {
         <div>
           {/* Brand Wordmark */}
           <div className="border-b border-[#E5E2DC] px-6 py-5">
-            <div className="text-lg font-bold tracking-tight text-[#1C2421] whitespace-nowrap">
+            <button
+              type="button"
+              onClick={navigateToWebsite}
+              className="text-left text-lg font-bold tracking-tight text-[#1C2421] whitespace-nowrap hover:text-[#2D5A4C]"
+            >
               KindredCare
-            </div>
+            </button>
             <div className="mt-0.5 text-xs text-[#5A6662]">
               {workspace.settings.careRecipient} · Care Hub
             </div>
@@ -136,7 +197,7 @@ export default function App() {
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => setActiveTab(item.id)}
+                  onClick={() => navigateToWorkspace(item.id)}
                   className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-xs font-medium transition-colors whitespace-nowrap ${
                     isActive
                       ? 'bg-[#EEF4F1] text-[#2D5A4C]'
@@ -149,6 +210,17 @@ export default function App() {
               );
             })}
           </nav>
+
+          <div className="px-3 pt-1">
+            <button
+              type="button"
+              onClick={navigateToWebsite}
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-[#5A6662] transition-colors hover:bg-[#F8F7F4] hover:text-[#1C2421]"
+            >
+              <ArrowLeft className="h-3.5 w-3.5 shrink-0" />
+              <span>Back to Website</span>
+            </button>
+          </div>
         </div>
 
         {/* Instant Sibling Role Switcher */}
@@ -194,7 +266,13 @@ export default function App() {
         {/* Top Bar adhering to 3-zone contract */}
         <header className="no-print flex items-center justify-between gap-8 border-b border-[#E5E2DC] bg-white px-6 py-4">
           <div className="flex items-center gap-2 text-xs text-[#5A6662] whitespace-nowrap">
-            <span className="font-semibold text-[#1C2421] lg:hidden">KindredCare</span>
+            <button
+              type="button"
+              onClick={navigateToWebsite}
+              className="font-semibold text-[#1C2421] hover:text-[#2D5A4C] lg:hidden"
+            >
+              KindredCare
+            </button>
             <span className="lg:hidden" aria-hidden="true">/</span>
             <span className="hidden lg:inline">{workspace.settings.careRecipient} Family Care</span>
             <span className="hidden lg:inline" aria-hidden="true">/</span>
@@ -230,11 +308,18 @@ export default function App() {
         {/* Mobile Navigation Strip */}
         <div className="no-print flex overflow-x-auto border-b border-[#E5E2DC] bg-white px-4 py-2 lg:hidden">
           <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={navigateToWebsite}
+              className="whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium text-[#5A6662]"
+            >
+              ← Website
+            </button>
             {navItems.map((item) => (
               <button
                 key={item.id}
                 type="button"
-                onClick={() => setActiveTab(item.id)}
+                onClick={() => navigateToWorkspace(item.id)}
                 className={`whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium ${
                   activeTab === item.id
                     ? 'bg-[#EEF4F1] text-[#2D5A4C]'
@@ -253,7 +338,7 @@ export default function App() {
             <OverviewView
               workspace={workspace}
               activeMember={activeMember}
-              onNavigate={(tab) => setActiveTab(tab)}
+              onNavigate={(tab) => navigateToWorkspace(tab)}
               onSelectClaim={(claim) => setSelectedClaimId(claim.id)}
               onOpenCapture={(mode) => handleOpenCapture(mode)}
             />
