@@ -5,11 +5,17 @@ import http from 'http';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import {
+  authenticateUser,
   createClaim,
+  createDemoSession,
   createExpense,
   createSettlement,
+  DuplicateEmailError,
   getClaimById,
+  getSessionUserByToken,
   getWorkspaceSnapshot,
+  registerUser,
+  revokeSessionToken,
   updateClaim,
   updateExpenseFlags,
   updateMemberSplits,
@@ -20,7 +26,7 @@ import {
   generateAppealLetterWithAI,
   parseReceiptOrEmailWithAI,
 } from './server/gemini';
-import type { ClaimStatus, ExpenseCategory } from './src/types';
+import type { AuthUser, ClaimStatus, ExpenseCategory } from './src/types';
 
 const ALLOWED_MIME_TYPES = new Set([
   'image/png',
@@ -50,6 +56,42 @@ function isValidIsoDate(value: unknown): value is string {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
+function isValidEmail(value: unknown): value is string {
+  return typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+const DEMO_MEMBER_IDS = new Set(['maya', 'david', 'elena']);
+
+interface AuthenticatedRequest extends express.Request {
+  authUser?: AuthUser;
+}
+
+function extractBearerToken(req: express.Request): string | null {
+  const header = req.headers.authorization;
+  if (!header || typeof header !== 'string') return null;
+  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
+  return match ? match[1].trim() : null;
+}
+
+function requireAuth(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+): void {
+  const token = extractBearerToken(req);
+  if (!token) {
+    res.status(401).json({ error: 'Authentication required. Please sign in to continue.' });
+    return;
+  }
+  const user = getSessionUserByToken(token);
+  if (!user) {
+    res.status(401).json({ error: 'Your session has expired or is invalid. Please sign in again.' });
+    return;
+  }
+  (req as AuthenticatedRequest).authUser = user;
+  next();
+}
+
 async function startServer() {
   const app = express();
   const httpServer = http.createServer(app);
@@ -57,8 +99,111 @@ async function startServer() {
 
   app.use(express.json({ limit: '16mb' }));
 
+  // Public Authentication Endpoints
+  app.post('/api/auth/register', (req, res) => {
+    try {
+      const { name, email, password, roleLabel } = req.body as {
+        name?: string;
+        email?: string;
+        password?: string;
+        roleLabel?: string;
+      };
+
+      if (!name || typeof name !== 'string' || name.trim().length < 2) {
+        res.status(400).json({ error: 'Please enter your full name (at least 2 characters).' });
+        return;
+      }
+      if (!isValidEmail(email)) {
+        res.status(400).json({ error: 'Please enter a valid email address.' });
+        return;
+      }
+      if (!password || typeof password !== 'string' || password.length < 8) {
+        res.status(400).json({ error: 'Password must be at least 8 characters long.' });
+        return;
+      }
+
+      const cleanRole =
+        typeof roleLabel === 'string' && roleLabel.trim() ? roleLabel.trim().slice(0, 60) : 'Family Care Member';
+
+      const session = registerUser({
+        name: name.trim(),
+        email,
+        password,
+        roleLabel: cleanRole,
+      });
+
+      res.status(201).json(session);
+    } catch (err) {
+      if (err instanceof DuplicateEmailError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      const message = err instanceof Error ? err.message : 'Failed to create account';
+      res.status(500).json({ error: message });
+    }
+  });
+
+  app.post('/api/auth/login', (req, res) => {
+    try {
+      const { email, password } = req.body as { email?: string; password?: string };
+      if (!isValidEmail(email) || !password || typeof password !== 'string') {
+        res.status(400).json({ error: 'Email and password are required.' });
+        return;
+      }
+
+      const session = authenticateUser(email, password);
+      if (!session) {
+        res.status(401).json({ error: 'Invalid email address or password.' });
+        return;
+      }
+
+      res.json(session);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to sign in';
+      res.status(500).json({ error: message });
+    }
+  });
+
+  app.post('/api/auth/demo', (req, res) => {
+    try {
+      const { memberId } = req.body as { memberId?: string };
+      if (!memberId || !DEMO_MEMBER_IDS.has(memberId)) {
+        res.status(400).json({ error: 'Please select a valid demo sibling profile.' });
+        return;
+      }
+
+      const session = createDemoSession(memberId as 'maya' | 'david' | 'elena');
+      if (!session) {
+        res.status(404).json({ error: 'Demo profile not found.' });
+        return;
+      }
+
+      res.json(session);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to sign in with demo profile';
+      res.status(500).json({ error: message });
+    }
+  });
+
+  app.post('/api/auth/logout', (req, res) => {
+    try {
+      const token = extractBearerToken(req);
+      if (token) {
+        revokeSessionToken(token);
+      }
+      res.json({ ok: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to sign out';
+      res.status(500).json({ error: message });
+    }
+  });
+
+  app.get('/api/auth/me', requireAuth, (req, res) => {
+    res.json({ user: (req as AuthenticatedRequest).authUser });
+  });
+
   // Workspace snapshot (all members, claims, expenses, settlements, calculated balances)
-  app.get('/api/workspace', (_req, res) => {
+  app.get('/api/workspace', requireAuth, (_req, res) => {
     try {
       const snapshot = getWorkspaceSnapshot();
       res.json(snapshot);
@@ -69,7 +214,7 @@ async function startServer() {
   });
 
   // Multimodal AI EOB / Hospital Bill Auditor
-  app.post('/api/ai/audit-claim', async (req, res) => {
+  app.post('/api/ai/audit-claim', requireAuth, async (req, res) => {
     try {
       const { fileBase64, mimeType, rawText, uploadedBy } = req.body as {
         fileBase64?: string;
@@ -135,7 +280,7 @@ async function startServer() {
   });
 
   // One-click AI Appeal Letter Generator
-  app.post('/api/ai/generate-appeal', async (req, res) => {
+  app.post('/api/ai/generate-appeal', requireAuth, async (req, res) => {
     try {
       const { claimId, representativeName } = req.body as {
         claimId?: string;
@@ -170,7 +315,7 @@ async function startServer() {
   });
 
   // Update claim status, submission date, or edited appeal letter
-  app.patch('/api/claims/:id', (req, res) => {
+  app.patch('/api/claims/:id', requireAuth, (req, res) => {
     try {
       const { id } = req.params;
       const { status, appealLetter, submittedAt } = req.body as {
@@ -205,7 +350,7 @@ async function startServer() {
   });
 
   // AI Receipt or Amazon/Pharmacy Email Parser
-  app.post('/api/ai/parse-receipt', async (req, res) => {
+  app.post('/api/ai/parse-receipt', requireAuth, async (req, res) => {
     try {
       const { fileBase64, mimeType, emailText } = req.body as {
         fileBase64?: string;
@@ -241,7 +386,7 @@ async function startServer() {
   });
 
   // Create a shared caregiving expense
-  app.post('/api/expenses', (req, res) => {
+  app.post('/api/expenses', requireAuth, (req, res) => {
     try {
       const {
         vendor,
@@ -314,7 +459,7 @@ async function startServer() {
   });
 
   // Update tax / Medicaid verification flags on an expense
-  app.patch('/api/expenses/:id', (req, res) => {
+  app.patch('/api/expenses/:id', requireAuth, (req, res) => {
     try {
       const { id } = req.params;
       const { irs502Eligible, fsaHsaEligible, medicaidLookbackVerified, receiptAttached, taxNotes } =
@@ -347,7 +492,7 @@ async function startServer() {
   });
 
   // Update sibling split percentages (must sum to 100)
-  app.put('/api/members/splits', (req, res) => {
+  app.put('/api/members/splits', requireAuth, (req, res) => {
     try {
       const { splits, unpaidCareHoursMonthly, localCareOffsetNote } = req.body as {
         splits?: Array<{ id: string; splitPercentage: number }>;
@@ -388,7 +533,7 @@ async function startServer() {
   });
 
   // Record a sibling settlement payment
-  app.post('/api/settlements', (req, res) => {
+  app.post('/api/settlements', requireAuth, (req, res) => {
     try {
       const { fromMemberId, toMemberId, amount, method, note } = req.body as {
         fromMemberId?: string;
@@ -433,7 +578,7 @@ async function startServer() {
   });
 
   // Update Family Plan Tier
-  app.patch('/api/settings/plan', (req, res) => {
+  app.patch('/api/settings/plan', requireAuth, (req, res) => {
     try {
       const { planTier } = req.body as { planTier?: 'free' | 'family_care' };
       if (planTier !== 'free' && planTier !== 'family_care') {

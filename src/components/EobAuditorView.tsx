@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import type { ClaimStatus, FamilyMember, MedicalClaim } from '../types';
 import { getInsurerTimeline } from '../utils/appealTimeline';
+import { apiFetch } from '../utils/authClient';
 import { formatCurrency, formatShortDate } from '../utils/format';
 import { AppealProgressTracker } from './AppealProgressTracker';
 
@@ -80,7 +81,7 @@ export const EobAuditorView: React.FC<EobAuditorViewProps> = ({
     setErrorMsg(null);
     setIsGeneratingAppeal(true);
     try {
-      const res = await fetch('/api/ai/generate-appeal', {
+      const res = await apiFetch('/api/ai/generate-appeal', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -110,7 +111,7 @@ export const EobAuditorView: React.FC<EobAuditorViewProps> = ({
     setErrorMsg(null);
     setIsSaving(true);
     try {
-      const res = await fetch(`/api/claims/${activeClaim.id}`, {
+      const res = await apiFetch(`/api/claims/${activeClaim.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Briefcase, Check, Lock, ShieldCheck } from 'lucide-react';
 import type { WorkspaceSnapshot } from '../types';
+import { apiFetch } from '../utils/authClient';
 
 interface CarePlanViewProps {
   workspace: WorkspaceSnapshot;
@@ -18,12 +19,14 @@ export const CarePlanView: React.FC<CarePlanViewProps> = ({
   const handlePlanChange = async (planTier: 'free' | 'family_care') => {
     setIsUpdating(true);
     try {
-      await fetch('/api/settings/plan', {
+      const res = await apiFetch('/api/settings/plan', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ planTier }),
       });
-      await onRefreshWorkspace();
+      if (res.ok) {
+        await onRefreshWorkspace();
+      }
     } finally {
       setIsUpdating(false);
     }

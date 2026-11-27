@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { CheckCircle2, Download, FileWarning, Printer, ShieldCheck } from 'lucide-react';
 import type { CareExpense, WorkspaceSnapshot } from '../types';
+import { apiFetch } from '../utils/authClient';
 import { downloadVaultCsv, formatCurrency, formatShortDate } from '../utils/format';
 
 interface TaxMedicaidVaultViewProps {
@@ -55,7 +56,7 @@ export const TaxMedicaidVaultView: React.FC<TaxMedicaidVaultViewProps> = ({
     setErrorMsg(null);
     setUpdatingId(expense.id);
     try {
-      const res = await fetch(`/api/expenses/${expense.id}`, {
+      const res = await apiFetch(`/api/expenses/${expense.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ [field]: !expense[field] }),

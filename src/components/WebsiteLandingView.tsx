@@ -1,10 +1,14 @@
 import React, { useState } from 'react';
-import { ArrowRight, Check, FileSearch, FolderArchive, Lock, Scale, ShieldCheck } from 'lucide-react';
+import { ArrowRight, Check, FileSearch, FolderArchive, Lock, LogOut, Scale, ShieldCheck } from 'lucide-react';
+import type { AuthUser } from '../types';
 
 export type WorkspaceEntryTab = 'overview' | 'auditor' | 'ledger' | 'vault' | 'plan';
 
 interface WebsiteLandingViewProps {
+  authUser: AuthUser | null;
   onLaunchWorkspace: (tab?: WorkspaceEntryTab) => void;
+  onOpenSignIn: (mode?: 'signin' | 'register') => void;
+  onSignOut: () => void;
 }
 
 interface EditorialPhotoProps {
@@ -41,7 +45,12 @@ const EditorialPhoto: React.FC<EditorialPhotoProps> = ({ src, alt, fallbackTitle
   );
 };
 
-export const WebsiteLandingView: React.FC<WebsiteLandingViewProps> = ({ onLaunchWorkspace }) => {
+export const WebsiteLandingView: React.FC<WebsiteLandingViewProps> = ({
+  authUser,
+  onLaunchWorkspace,
+  onOpenSignIn,
+  onSignOut,
+}) => {
   const scrollToSection = (id: string) => {
     const el = document.getElementById(id);
     if (el) {
@@ -120,15 +129,47 @@ export const WebsiteLandingView: React.FC<WebsiteLandingViewProps> = ({ onLaunch
             </a>
           </nav>
 
-          {/* Zone 3: Primary CTA */}
-          <div className="shrink-0">
-            <button
-              type="button"
-              onClick={() => onLaunchWorkspace('overview')}
-              className="whitespace-nowrap shrink-0 rounded-lg bg-[#2D5A4C] px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-[#23473C]"
-            >
-              Launch Workspace
-            </button>
+          {/* Zone 3: Account Controls & Primary CTA */}
+          <div className="flex items-center gap-2.5 shrink-0">
+            {authUser ? (
+              <>
+                <span className="hidden text-xs font-medium text-[#5A6662] whitespace-nowrap sm:inline">
+                  {authUser.name}
+                </span>
+                <button
+                  type="button"
+                  onClick={onSignOut}
+                  className="inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 rounded-lg border border-[#E5E2DC] bg-white px-3 py-2 text-xs font-medium text-[#1C2421] transition-colors hover:bg-[#F1EFEA]"
+                >
+                  <LogOut className="h-3.5 w-3.5 text-[#5A6662]" />
+                  Sign Out
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onLaunchWorkspace('overview')}
+                  className="whitespace-nowrap shrink-0 rounded-lg bg-[#2D5A4C] px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-[#23473C]"
+                >
+                  Open Workspace
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onOpenSignIn('signin')}
+                  className="whitespace-nowrap shrink-0 rounded-lg border border-[#E5E2DC] bg-white px-3.5 py-2 text-xs font-medium text-[#1C2421] transition-colors hover:bg-[#F1EFEA]"
+                >
+                  Sign In
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onLaunchWorkspace('overview')}
+                  className="whitespace-nowrap shrink-0 rounded-lg bg-[#2D5A4C] px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-[#23473C]"
+                >
+                  Launch Workspace
+                </button>
+              </>
+            )}
           </div>
         </div>
       </header>
@@ -169,7 +210,9 @@ export const WebsiteLandingView: React.FC<WebsiteLandingViewProps> = ({ onLaunch
                 </button>
               </div>
               <p className="mt-4 text-xs text-[#5A6662]">
-                Includes pre-loaded demo family workspace · No account signup required to explore
+                {authUser
+                  ? `Signed in as ${authUser.name} (${authUser.roleLabel}) · Your family workspace is ready`
+                  : 'Sign in with one-click demo sibling access or create your own family account'}
               </p>
             </div>
 
@@ -626,6 +669,23 @@ export const WebsiteLandingView: React.FC<WebsiteLandingViewProps> = ({ onLaunch
               <Lock className="h-3.5 w-3.5 text-[#2D5A4C]" />
               Server-Side PHI Processing
             </span>
+            {authUser ? (
+              <button
+                type="button"
+                onClick={onSignOut}
+                className="font-medium text-[#1C2421] hover:underline"
+              >
+                Sign Out ({authUser.name})
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onOpenSignIn('signin')}
+                className="font-medium text-[#1C2421] hover:underline"
+              >
+                Sign In
+              </button>
+            )}
             <button
               type="button"
               onClick={() => onLaunchWorkspace('overview')}

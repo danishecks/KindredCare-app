@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { FileText, Loader2, Receipt, Sparkles, Upload, X } from 'lucide-react';
 import type { CareExpense, ExpenseCategory, FamilyMember, MedicalClaim } from '../types';
+import { apiFetch } from '../utils/authClient';
 import { SAMPLE_AMAZON_RECEIPT_TEXT, SAMPLE_MEDICAL_BILL_TEXT } from '../utils/format';
 
 interface CaptureModalProps {
@@ -88,7 +89,7 @@ export const CaptureModal: React.FC<CaptureModalProps> = ({
         mimeType = converted.mimeType;
       }
 
-      const res = await fetch('/api/ai/audit-claim', {
+      const res = await apiFetch('/api/ai/audit-claim', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -127,7 +128,7 @@ export const CaptureModal: React.FC<CaptureModalProps> = ({
         mimeType = converted.mimeType;
       }
 
-      const res = await fetch('/api/ai/parse-receipt', {
+      const res = await apiFetch('/api/ai/parse-receipt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -164,7 +165,7 @@ export const CaptureModal: React.FC<CaptureModalProps> = ({
     setErrorMsg(null);
     setIsLoading(true);
     try {
-      const res = await fetch('/api/expenses', {
+      const res = await apiFetch('/api/expenses', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

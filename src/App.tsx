@@ -5,10 +5,12 @@ import {
   FolderArchive,
   LayoutDashboard,
   Loader2,
+  LogOut,
   Plus,
   Scale,
   ShieldCheck,
 } from 'lucide-react';
+import { AuthView } from './components/AuthView';
 import { CaptureModal } from './components/CaptureModal';
 import { CarePlanView } from './components/CarePlanView';
 import { EobAuditorView } from './components/EobAuditorView';
@@ -16,10 +18,11 @@ import { OverviewView } from './components/OverviewView';
 import { SplitLedgerView } from './components/SplitLedgerView';
 import { TaxMedicaidVaultView } from './components/TaxMedicaidVaultView';
 import { WebsiteLandingView, type WorkspaceEntryTab } from './components/WebsiteLandingView';
-import type { MedicalClaim, WorkspaceSnapshot } from './types';
+import type { AuthSessionResponse, AuthUser, MedicalClaim, WorkspaceSnapshot } from './types';
+import { apiFetch, setAuthToken, setUnauthorizedHandler } from './utils/authClient';
 
 type ActiveTab = WorkspaceEntryTab;
-type ViewMode = 'website' | 'workspace';
+type ViewMode = 'website' | 'signin' | 'workspace';
 
 const TAB_LABELS: Record<ActiveTab, string> = {
   overview: 'Overview',
@@ -31,6 +34,9 @@ const TAB_LABELS: Record<ActiveTab, string> = {
 
 function parseRouteFromHash(): { mode: ViewMode; tab: ActiveTab } {
   const hash = window.location.hash;
+  if (hash.startsWith('#/signin')) {
+    return { mode: 'signin', tab: 'overview' };
+  }
   if (!hash.startsWith('#/workspace')) {
     return { mode: 'website', tab: 'overview' };
   }
@@ -43,7 +49,18 @@ function parseRouteFromHash(): { mode: ViewMode; tab: ActiveTab } {
 
 export default function App() {
   const initialRoute = parseRouteFromHash();
-  const [viewMode, setViewMode] = useState<ViewMode>(initialRoute.mode);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authInitialMode, setAuthInitialMode] = useState<'signin' | 'register'>('signin');
+  const [authNotice, setAuthNotice] = useState<string | null>(
+    initialRoute.mode === 'workspace' ? 'Please sign in to access your family care workspace.' : null
+  );
+  const [pendingWorkspaceTab, setPendingWorkspaceTab] = useState<ActiveTab>(
+    initialRoute.mode === 'workspace' ? initialRoute.tab : 'overview'
+  );
+
+  const [viewMode, setViewMode] = useState<ViewMode>(
+    initialRoute.mode === 'workspace' ? 'signin' : initialRoute.mode
+  );
   const [activeTab, setActiveTab] = useState<ActiveTab>(initialRoute.tab);
 
   const [workspace, setWorkspace] = useState<WorkspaceSnapshot | null>(null);
@@ -51,12 +68,13 @@ export default function App() {
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
   const [captureOpen, setCaptureOpen] = useState(false);
   const [captureInitialTab, setCaptureInitialTab] = useState<'bill' | 'receipt' | 'manual'>('bill');
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const fetchWorkspace = useCallback(async () => {
+    setIsLoading(true);
     try {
-      const res = await fetch('/api/workspace');
+      const res = await apiFetch('/api/workspace');
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || 'Failed to load family care workspace');
@@ -71,18 +89,40 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    void fetchWorkspace();
-  }, [fetchWorkspace]);
+    setUnauthorizedHandler(() => {
+      setAuthToken(null);
+      setAuthUser(null);
+      setWorkspace(null);
+      setAuthNotice('Your session expired or was signed out. Please sign in again.');
+      if (window.location.hash !== '#/signin') {
+        window.location.hash = '#/signin';
+      }
+      setViewMode('signin');
+    });
+    return () => setUnauthorizedHandler(null);
+  }, []);
+
+  useEffect(() => {
+    if (authUser) {
+      void fetchWorkspace();
+    }
+  }, [authUser, fetchWorkspace]);
 
   useEffect(() => {
     const onHashChange = () => {
       const parsed = parseRouteFromHash();
+      if (parsed.mode === 'workspace' && !authUser) {
+        setPendingWorkspaceTab(parsed.tab);
+        setAuthNotice('Please sign in to access your family care workspace.');
+        setViewMode('signin');
+        return;
+      }
       setViewMode(parsed.mode);
       setActiveTab(parsed.tab);
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
-  }, []);
+  }, [authUser]);
 
   const navigateToWebsite = () => {
     window.location.hash = '#/';
@@ -90,7 +130,22 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const navigateToSignIn = (mode: 'signin' | 'register' = 'signin', notice: string | null = null) => {
+    setAuthInitialMode(mode);
+    setAuthNotice(notice);
+    if (window.location.hash !== '#/signin') {
+      window.location.hash = '#/signin';
+    }
+    setViewMode('signin');
+    window.scrollTo({ top: 0 });
+  };
+
   const navigateToWorkspace = (tab: ActiveTab = 'overview') => {
+    if (!authUser) {
+      setPendingWorkspaceTab(tab);
+      navigateToSignIn('signin', 'Sign in or use a demo sibling profile to open the workspace.');
+      return;
+    }
     const targetHash = tab === 'overview' ? '#/workspace' : `#/workspace/${tab}`;
     if (window.location.hash !== targetHash) {
       window.location.hash = targetHash;
@@ -100,8 +155,64 @@ export default function App() {
     window.scrollTo({ top: 0 });
   };
 
+  const handleAuthenticated = (session: AuthSessionResponse) => {
+    setAuthToken(session.token);
+    setAuthUser(session.user);
+    setAuthNotice(null);
+    setLoadError(null);
+    if (session.user.memberId) {
+      setActiveMemberId(session.user.memberId);
+    }
+
+    const destinationTab = pendingWorkspaceTab || 'overview';
+    setPendingWorkspaceTab('overview');
+    const targetHash = destinationTab === 'overview' ? '#/workspace' : `#/workspace/${destinationTab}`;
+    if (window.location.hash !== targetHash) {
+      window.location.hash = targetHash;
+    }
+    setActiveTab(destinationTab);
+    setViewMode('workspace');
+    window.scrollTo({ top: 0 });
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await apiFetch('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // Ignore network errors during logout cleanup
+    } finally {
+      setAuthToken(null);
+      setAuthUser(null);
+      setWorkspace(null);
+      setSelectedClaimId(null);
+      setCaptureOpen(false);
+      setAuthNotice(null);
+      window.location.hash = '#/';
+      setViewMode('website');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
   if (viewMode === 'website') {
-    return <WebsiteLandingView onLaunchWorkspace={(tab) => navigateToWorkspace(tab ?? 'overview')} />;
+    return (
+      <WebsiteLandingView
+        authUser={authUser}
+        onLaunchWorkspace={(tab) => navigateToWorkspace(tab ?? 'overview')}
+        onOpenSignIn={(mode) => navigateToSignIn(mode ?? 'signin')}
+        onSignOut={() => void handleSignOut()}
+      />
+    );
+  }
+
+  if (viewMode === 'signin' || !authUser) {
+    return (
+      <AuthView
+        initialMode={authInitialMode}
+        noticeMessage={authNotice}
+        onAuthenticated={handleAuthenticated}
+        onBackToWebsite={navigateToWebsite}
+      />
+    );
   }
 
   if (isLoading && !workspace) {
@@ -223,40 +334,61 @@ export default function App() {
           </div>
         </div>
 
-        {/* Instant Sibling Role Switcher */}
-        <div className="border-t border-[#E5E2DC] p-4">
-          <div className="mb-2 text-[11px] font-semibold text-[#5A6662]">
-            Switch Sibling Perspective
-          </div>
-          <div className="space-y-1.5">
-            {workspace.members.map((member) => {
-              const isCurrent = member.id === activeMember.id;
-              return (
-                <button
-                  key={member.id}
-                  type="button"
-                  onClick={() => setActiveMemberId(member.id)}
-                  className={`flex w-full items-center gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-colors ${
-                    isCurrent
-                      ? 'border-[#2D5A4C]/40 bg-[#EEF4F1]'
-                      : 'border-transparent hover:bg-[#F8F7F4]'
-                  }`}
-                >
-                  <img
-                    src={member.avatarUrl}
-                    alt={member.name}
-                    referrerPolicy="no-referrer"
-                    className="h-7 w-7 shrink-0 rounded-full border border-[#E5E2DC] object-cover"
-                  />
-                  <div className="min-w-0">
-                    <div className="truncate text-xs font-semibold text-[#1C2421]">{member.name}</div>
-                    <div className="truncate text-[11px] text-[#5A6662]">
-                      {member.roleLabel} · {member.splitPercentage}%
+        {/* Bottom Switcher + Account Session */}
+        <div className="border-t border-[#E5E2DC]">
+          <div className="p-4">
+            <div className="mb-2 text-[11px] font-semibold text-[#5A6662]">
+              Switch Sibling Perspective
+            </div>
+            <div className="space-y-1.5">
+              {workspace.members.map((member) => {
+                const isCurrent = member.id === activeMember.id;
+                return (
+                  <button
+                    key={member.id}
+                    type="button"
+                    onClick={() => setActiveMemberId(member.id)}
+                    className={`flex w-full items-center gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-colors ${
+                      isCurrent
+                        ? 'border-[#2D5A4C]/40 bg-[#EEF4F1]'
+                        : 'border-transparent hover:bg-[#F8F7F4]'
+                    }`}
+                  >
+                    <img
+                      src={member.avatarUrl}
+                      alt={member.name}
+                      referrerPolicy="no-referrer"
+                      className="h-7 w-7 shrink-0 rounded-full border border-[#E5E2DC] object-cover"
+                    />
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-semibold text-[#1C2421]">{member.name}</div>
+                      <div className="truncate text-[11px] text-[#5A6662]">
+                        {member.roleLabel} · {member.splitPercentage}%
+                      </div>
                     </div>
-                  </div>
-                </button>
-              );
-            })}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Signed-In Account & Sign Out */}
+          <div className="border-t border-[#E5E2DC] bg-[#F8F7F4] px-4 py-3.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="truncate text-xs font-semibold text-[#1C2421]">{authUser.name}</div>
+                <div className="truncate text-[11px] text-[#5A6662]">{authUser.email}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleSignOut()}
+                aria-label="Sign Out"
+                className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[#E5E2DC] bg-white px-2.5 py-1.5 text-[11px] font-medium text-[#1C2421] transition-colors hover:bg-[#F1EFEA]"
+              >
+                <LogOut className="h-3 w-3 text-[#5A6662]" />
+                Sign Out
+              </button>
+            </div>
           </div>
         </div>
       </aside>
@@ -264,7 +396,7 @@ export default function App() {
       {/* Main Content Area */}
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Top Bar adhering to 3-zone contract */}
-        <header className="no-print flex items-center justify-between gap-8 border-b border-[#E5E2DC] bg-white px-6 py-4">
+        <header className="no-print flex items-center justify-between gap-6 border-b border-[#E5E2DC] bg-white px-6 py-4">
           <div className="flex items-center gap-2 text-xs text-[#5A6662] whitespace-nowrap">
             <button
               type="button"
@@ -279,7 +411,7 @@ export default function App() {
             <span className="font-medium text-[#1C2421]">{TAB_LABELS[activeTab]}</span>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2.5 shrink-0">
             {/* Mobile Sibling Switcher */}
             <select
               aria-label="Active sibling perspective"
@@ -301,6 +433,15 @@ export default function App() {
             >
               <Plus className="h-3.5 w-3.5" />
               Scan Bill or Receipt
+            </button>
+
+            <button
+              type="button"
+              onClick={() => void handleSignOut()}
+              className="inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 rounded-lg border border-[#E5E2DC] bg-white px-3 py-2 text-xs font-medium text-[#1C2421] transition-colors hover:bg-[#F1EFEA]"
+            >
+              <LogOut className="h-3.5 w-3.5 text-[#5A6662]" />
+              Sign Out
             </button>
           </div>
         </header>

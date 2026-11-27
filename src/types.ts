@@ -129,3 +129,17 @@ export interface WorkspaceSnapshot {
   balances: MemberBalanceSummary[];
   suggestedTransfers: SuggestedTransfer[];
 }
+
+export interface AuthUser {
+  id: string;
+  name: string;
+  email: string;
+  roleLabel: string;
+  memberId?: string | null;
+  avatarUrl?: string | null;
+}
+
+export interface AuthSessionResponse {
+  token: string;
+  user: AuthUser;
+}

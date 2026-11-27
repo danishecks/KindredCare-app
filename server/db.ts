@@ -1,6 +1,9 @@
+import crypto from 'crypto';
 import Database from 'better-sqlite3';
 import path from 'path';
 import type {
+  AuthSessionResponse,
+  AuthUser,
   CareExpense,
   CareSettings,
   ClaimError,
@@ -94,6 +97,26 @@ db.exec(`
     note TEXT NOT NULL,
     FOREIGN KEY (from_member_id) REFERENCES family_members(id),
     FOREIGN KEY (to_member_id) REFERENCES family_members(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    password_salt TEXT NOT NULL,
+    role_label TEXT NOT NULL,
+    member_id TEXT,
+    avatar_url TEXT,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
 `);
 
@@ -414,6 +437,41 @@ David Chen (Authorized Care Representative for Eleanor Vance)`;
 }
 
 seedInitialDataIfEmpty();
+
+function seedDemoUsersIfEmpty(): void {
+  const existingCount = (db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number }).count;
+  if (existingCount > 0) {
+    return;
+  }
+
+  const members = db.prepare('SELECT id, name, role_label, avatar_url FROM family_members').all() as Array<{
+    id: string;
+    name: string;
+    role_label: string;
+    avatar_url: string;
+  }>;
+
+  const insertUser = db.prepare(`
+    INSERT OR IGNORE INTO users (
+      id, name, email, password_hash, password_salt, role_label, member_id, avatar_url, created_at
+    ) VALUES (?, ?, ?, '', '', ?, ?, ?, ?)
+  `);
+
+  const now = new Date().toISOString();
+  for (const m of members) {
+    insertUser.run(
+      `user-${m.id}`,
+      m.name,
+      `${m.id}.chen@vancecare.demo`,
+      m.role_label,
+      m.id,
+      m.avatar_url,
+      now
+    );
+  }
+}
+
+seedDemoUsersIfEmpty();
 
 function parseClaimRow(row: Record<string, unknown>): MedicalClaim {
   return {
@@ -761,4 +819,133 @@ export function createSettlement(settlement: SettlementRecord): SettlementRecord
     settlement.note
   );
   return settlement;
+}
+
+export class DuplicateEmailError extends Error {
+  constructor() {
+    super('An account with this email address already exists.');
+    this.name = 'DuplicateEmailError';
+  }
+}
+
+function parseAuthUserRow(row: Record<string, unknown>): AuthUser {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    email: String(row.email),
+    roleLabel: String(row.role_label),
+    memberId: row.member_id ? String(row.member_id) : null,
+    avatarUrl: row.avatar_url ? String(row.avatar_url) : null,
+  };
+}
+
+function hashPassword(password: string, existingSalt?: string): { hash: string; salt: string } {
+  const salt = existingSalt ?? crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return { hash, salt };
+}
+
+function verifyPassword(password: string, storedHash: string, storedSalt: string): boolean {
+  if (!storedHash || !storedSalt) return false;
+  try {
+    const derived = crypto.scryptSync(password, storedSalt, 64);
+    const expected = Buffer.from(storedHash, 'hex');
+    if (derived.length !== expected.length) return false;
+    return crypto.timingSafeEqual(derived, expected);
+  } catch {
+    return false;
+  }
+}
+
+function hashSessionToken(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+export function createSessionForUser(user: AuthUser): AuthSessionResponse {
+  const token = crypto.randomBytes(32).toString('hex');
+  const tokenHash = hashSessionToken(token);
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(now.toISOString());
+  db.prepare(`
+    INSERT INTO sessions (token_hash, user_id, expires_at, created_at)
+    VALUES (?, ?, ?, ?)
+  `).run(tokenHash, user.id, expiresAt, now.toISOString());
+
+  return { token, user };
+}
+
+export function registerUser(input: {
+  name: string;
+  email: string;
+  password: string;
+  roleLabel: string;
+}): AuthSessionResponse {
+  const normalizedEmail = input.email.trim().toLowerCase();
+  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(normalizedEmail);
+  if (existing) {
+    throw new DuplicateEmailError();
+  }
+
+  const { hash, salt } = hashPassword(input.password);
+  const userId = `user-${crypto.randomUUID()}`;
+  const now = new Date().toISOString();
+
+  db.prepare(`
+    INSERT INTO users (
+      id, name, email, password_hash, password_salt, role_label, member_id, avatar_url, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+  `).run(userId, input.name.trim(), normalizedEmail, hash, salt, input.roleLabel.trim(), now);
+
+  const row = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as Record<string, unknown>;
+  const user = parseAuthUserRow(row);
+  return createSessionForUser(user);
+}
+
+export function authenticateUser(email: string, password: string): AuthSessionResponse | null {
+  const normalizedEmail = email.trim().toLowerCase();
+  const row = db.prepare('SELECT * FROM users WHERE email = ?').get(normalizedEmail) as
+    | Record<string, unknown>
+    | undefined;
+  if (!row) return null;
+
+  const isValid = verifyPassword(
+    password,
+    String(row.password_hash || ''),
+    String(row.password_salt || '')
+  );
+  if (!isValid) return null;
+
+  return createSessionForUser(parseAuthUserRow(row));
+}
+
+export function createDemoSession(memberId: 'maya' | 'david' | 'elena'): AuthSessionResponse | null {
+  const row = db.prepare('SELECT * FROM users WHERE member_id = ?').get(memberId) as
+    | Record<string, unknown>
+    | undefined;
+  if (!row) return null;
+  return createSessionForUser(parseAuthUserRow(row));
+}
+
+export function getSessionUserByToken(token: string): AuthUser | null {
+  if (!token) return null;
+  const tokenHash = hashSessionToken(token);
+  const nowIso = new Date().toISOString();
+  const row = db
+    .prepare(`
+      SELECT u.*
+      FROM sessions s
+      INNER JOIN users u ON u.id = s.user_id
+      WHERE s.token_hash = ? AND s.expires_at > ?
+    `)
+    .get(tokenHash, nowIso) as Record<string, unknown> | undefined;
+
+  return row ? parseAuthUserRow(row) : null;
+}
+
+export function revokeSessionToken(token: string): void {
+  if (!token) return;
+  const tokenHash = hashSessionToken(token);
+  db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(tokenHash);
 }

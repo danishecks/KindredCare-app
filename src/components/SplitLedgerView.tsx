@@ -6,6 +6,7 @@ import type {
   SuggestedTransfer,
   WorkspaceSnapshot,
 } from '../types';
+import { apiFetch } from '../utils/authClient';
 import { formatCurrency, formatShortDate } from '../utils/format';
 
 interface SplitLedgerViewProps {
@@ -80,7 +81,7 @@ export const SplitLedgerView: React.FC<SplitLedgerViewProps> = ({
         id: m.id,
         splitPercentage: Number(draftSplits[m.id] ?? 0),
       }));
-      const res = await fetch('/api/members/splits', {
+      const res = await apiFetch('/api/members/splits', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -110,7 +111,7 @@ export const SplitLedgerView: React.FC<SplitLedgerViewProps> = ({
     setErrorMsg(null);
     setIsSaving(true);
     try {
-      const res = await fetch('/api/settlements', {
+      const res = await apiFetch('/api/settlements', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
